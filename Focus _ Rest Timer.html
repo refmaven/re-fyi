@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Focus / Rest</title>
+<style>
+:root{color-scheme:dark;--bg:#000;--fg:#fff;--dim:#777;--line:#333;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Courier New",monospace;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px;-webkit-tap-highlight-color:transparent}
+main{width:100%;max-width:560px;text-align:center}
+.mode{letter-spacing:.4em;text-transform:uppercase;font-size:14px;color:var(--dim);margin-bottom:12px}
+.time{font-size:clamp(48px,17vw,112px);font-weight:300;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1}
+.sub{margin-top:18px;min-height:20px;font-size:14px;color:var(--dim)}
+.sub b{color:var(--fg);font-weight:400}
+.bar{height:2px;background:var(--line);margin:28px 0;position:relative}
+.bar i{position:absolute;left:0;top:0;bottom:0;background:var(--fg);width:0}
+.btns{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+button{font:inherit;font-size:15px;background:var(--bg);color:var(--fg);border:1px solid var(--fg);padding:14px 22px;cursor:pointer;text-transform:uppercase;letter-spacing:.15em;border-radius:0}
+button.primary{background:var(--fg);color:var(--bg)}
+button:active{opacity:.6}
+button:focus-visible,input:focus-visible{outline:1px dashed var(--fg);outline-offset:3px}
+button[hidden]{display:none}
+.gear{position:fixed;top:calc(12px + env(safe-area-inset-top,0px));right:12px;border:0;color:var(--dim);padding:10px;letter-spacing:.1em;font-size:13px}
+#settings{position:fixed;inset:0;background:var(--bg);display:none;flex-direction:column;align-items:center;justify-content:center;padding:24px;z-index:5}
+#settings.open{display:flex}
+.panel{width:100%;max-width:420px}
+h2{font-weight:400;letter-spacing:.3em;text-transform:uppercase;font-size:14px;color:var(--dim);margin:0 0 28px;text-align:center}
+.row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:18px 0;border-bottom:1px solid var(--line);font-size:15px}
+.hint{font-size:12px;color:var(--dim);margin-top:6px;line-height:1.5}
+input[type=number]{font:inherit;font-size:18px;width:90px;background:var(--bg);color:var(--fg);border:1px solid var(--fg);padding:8px;text-align:center;border-radius:0}
+.tog{min-width:80px;padding:10px 14px}
+.tog[aria-pressed=true]{background:var(--fg);color:var(--bg)}
+.close{margin-top:32px;width:100%}
+</style>
+</head>
+<body>
+<button class="gear" id="gear" aria-label="Settings">[ settings ]</button>
+<main>
+  <div class="mode" id="mode">ready</div>
+  <div class="time" id="time">00:00:00</div>
+  <div class="sub" id="sub"></div>
+  <div class="bar"><i id="fill"></i></div>
+  <div class="btns">
+    <button class="primary" id="b1">Start focus</button>
+    <button id="b2" hidden>Reset</button>
+  </div>
+</main>
+
+<div id="settings" role="dialog" aria-modal="true" aria-label="Settings">
+  <div class="panel">
+    <h2>Settings</h2>
+    <div class="row">
+      <div>Focus : rest ratio
+        <div class="hint">Every <span id="rx">5</span> min of focus earns 1 min of rest.</div>
+      </div>
+      <input type="number" id="ratio" min="0.5" max="60" step="0.5" value="5">
+    </div>
+    <div class="row">
+      <div>Auto-start focus after rest
+        <div class="hint">Begin a new focus session when rest ends.</div>
+      </div>
+      <button class="tog" id="auto" aria-pressed="true">On</button>
+    </div>
+    <div class="row">
+      <div>Alarm sound<div class="hint">G5 → D#5, triangle wave</div></div>
+      <button class="tog" id="test">Test</button>
+    </div>
+    <button class="close primary" id="close">Done</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id)};
+  var cfg={ratio:5,auto:true};
+  try{var s=JSON.parse(localStorage.getItem('focusrest')||'null');if(s){if(s.ratio>0)cfg.ratio=+s.ratio;if(typeof s.auto==='boolean')cfg.auto=s.auto}}catch(e){}
+  function save(){try{localStorage.setItem('focusrest',JSON.stringify(cfg))}catch(e){}}
+
+  var state='idle',startT=0,restTotal=0,restEnd=0,lastFocusMs=0,tick=null,ctx=null;
+
+  function pad(n){return n<10?'0'+n:''+n}
+  function fmt(sec){sec=Math.max(0,Math.floor(sec));var h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;return pad(h)+':'+pad(m)+':'+pad(s)}
+  function restFor(ms){return Math.round(ms/1000/cfg.ratio)}
+
+  function audio(){
+    try{
+      if(!ctx)ctx=new(window.AudioContext||window.webkitAudioContext)();
+      if(ctx.state==='suspended')ctx.resume();
+    }catch(e){}
+  }
+  function chime(){
+    audio();if(!ctx)return;
+    var t0=ctx.currentTime+0.02;
+    [783.99,622.25].forEach(function(f,i){
+      var o=ctx.createOscillator(),g=ctx.createGain(),t=t0+i*0.2;
+      o.type='triangle';o.frequency.value=f;
+      g.gain.setValueAtTime(0.0001,t);
+      g.gain.linearRampToValueAtTime(0.4,t+0.01);
+      g.gain.setValueAtTime(0.4,t+0.18);
+      g.gain.linearRampToValueAtTime(0.0001,t+0.2);
+      o.connect(g);g.connect(ctx.destination);
+      o.start(t);o.stop(t+0.2);
+    });
+  }
+
+  function startFocus(){audio();state='focus';startT=Date.now();render();run()}
+  function startRest(){
+    audio();
+    lastFocusMs=Date.now()-startT;
+    restTotal=restFor(lastFocusMs);
+    if(restTotal<1){startFocus();return}
+    state='rest';restEnd=Date.now()+restTotal*1000;render();run();
+  }
+  function reset(){state='idle';stop();render()}
+  function run(){stop();tick=setInterval(update,200);update()}
+  function stop(){if(tick){clearInterval(tick);tick=null}}
+
+  function update(){
+    var now=Date.now();
+    if(state==='focus'){
+      var el=now-startT;
+      $('time').textContent=fmt(el/1000);
+      $('sub').innerHTML='rest earned: <b>'+fmt(restFor(el))+'</b>';
+      $('fill').style.width='0';
+      document.title=fmt(el/1000)+' · focus';
+    }else if(state==='rest'){
+      var left=Math.ceil((restEnd-now)/1000);
+      if(left<=0){
+        chime();
+        if(cfg.auto){startFocus()}else{state='idle';stop();render()}
+        return;
+      }
+      $('time').textContent=fmt(left);
+      $('fill').style.width=(100-left/restTotal*100)+'%';
+      document.title=fmt(left)+' · rest';
+    }
+  }
+
+  function render(){
+    var b1=$('b1'),b2=$('b2');
+    if(state==='idle'){
+      $('mode').textContent=lastFocusMs?'rest over':'ready';
+      $('time').textContent='00:00:00';
+      $('sub').textContent=lastFocusMs?'last focus: '+fmt(lastFocusMs/1000)+' · rest taken: '+fmt(restTotal):'ratio '+cfg.ratio+' : 1';
+      $('fill').style.width='0';
+      b1.textContent='Start focus';b1.onclick=startFocus;b2.hidden=true;
+      document.title='Focus / Rest';
+    }else if(state==='focus'){
+      $('mode').textContent='focus';
+      b1.textContent='Start rest';b1.onclick=startRest;
+      b2.textContent='Reset';b2.onclick=reset;b2.hidden=false;
+    }else{
+      $('mode').textContent='rest';
+      $('sub').textContent='earned from '+fmt(lastFocusMs/1000)+' of focus';
+      b1.textContent='Skip rest';b1.onclick=startFocus;
+      b2.textContent='Reset';b2.onclick=reset;b2.hidden=false;
+    }
+  }
+
+  function syncSettings(){
+    $('ratio').value=cfg.ratio;$('rx').textContent=cfg.ratio;
+    $('auto').textContent=cfg.auto?'On':'Off';$('auto').setAttribute('aria-pressed',cfg.auto);
+  }
+  $('gear').onclick=function(){syncSettings();$('settings').classList.add('open')};
+  $('close').onclick=function(){$('settings').classList.remove('open');if(state==='idle')render()};
+  $('ratio').oninput=function(){
+    var v=parseFloat(this.value);
+    if(v>0&&v<=60){cfg.ratio=v;$('rx').textContent=v;save()}
+  };
+  $('auto').onclick=function(){cfg.auto=!cfg.auto;save();syncSettings()};
+  $('test').onclick=chime;
+  document.addEventListener('visibilitychange',function(){if(state!=='idle')update()});
+
+  syncSettings();render();
+})();
+</script>
+</body>
+</html>
